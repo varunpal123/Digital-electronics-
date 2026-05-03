@@ -1,0 +1,136 @@
+// ATmega328P Top Module - Arduino Uno Compatible
+// Simplified version for FPGA implementation
+
+module atmega328p_top (
+    input wire clk,              // 16 MHz clock
+    input wire reset_n,          // Active low reset
+    
+    // GPIO Ports (Arduino Pins)
+    inout wire [7:0] portb,   // Digital pins 8-13
+    inout wire [7:0] portc,   // Analog pins A0-A5
+    inout wire [7:0] portd,   // Digital pins 0-7
+    
+    // UART (Serial)
+    input wire uart_rx,
+    output wire uart_tx,
+    
+    // SPI
+    input wire spi_miso,
+    output wire spi_mosi,
+    output wire spi_sck,
+    output wire spi_ss,
+    
+    // I2C
+    inout wire i2c_sda,
+    inout wire i2c_scl,
+    
+    // ADC Inputs
+    input wire [5:0] adc_in
+);
+
+    // Internal signals
+    wire [15:0] pc;              // Program counter
+    wire [15:0] instruction;   // Current instruction
+    wire [7:0] alu_result;
+    wire [7:0] reg_data [0:31]; // 32 general purpose registers
+    
+    // Memory
+    reg [15:0] program_mem [0:16383]; // 32KB Flash
+    reg [7:0] sram [0:2047];           // 2KB SRAM
+    reg [7:0] eeprom [0:1023];       // 1KB EEPROM
+    
+    // GPIO Control Signals
+    wire [7:0] ddrb, ddrb_out, ddrb_in;
+    wire [7:0] ddrc, ddrc_out, ddrc_in;
+    wire [7:0] ddrd, ddrd_out, ddrd_in;
+    
+    // Instantiate CPU Core
+    avr_cpu cpu (
+        .clk(clk),
+        .reset_n(reset_n),
+        .pc(pc),
+        .instruction(instruction),
+        .alu_result(alu_result)
+    );
+    
+    // Instantiate ALU
+    avr_alu alu (
+        .clk(clk),
+        .reset_n(reset_n),
+        .operand_a(reg_data[0]),
+        .operand_b(reg_data[1]),
+        .operation(4'b0000),
+        .result(alu_result)
+    );
+    
+    // Instantiate GPIO Ports
+    gpio_port gpio_b (
+        .clk(clk),
+        .reset_n(reset_n),
+        .ddr(ddrb),
+        .port_out(ddrb_out),
+        .pin_in(ddrb_in),
+        .io_pin(portb)
+    );
+    
+    gpio_port gpio_c (
+        .clk(clk),
+        .reset_n(reset_n),
+        .ddr(ddrc),
+        .port_out(ddrc_out),
+        .pin_in(ddrc_in),
+        .io_pin(portc)
+    );
+    
+    gpio_port gpio_d (
+        .clk(clk),
+        .reset_n(reset_n),
+        .ddr(ddrd),
+        .port_out(ddrd_out),
+        .pin_in(ddrd_in),
+        .io_pin(portd)
+    );
+    
+    // Instantiate UART
+    uart_module uart (
+        .clk(clk),
+        .reset_n(reset_n),
+        .rx(uart_rx),
+        .tx(uart_tx),
+        .baud_div(16'd103) // 9600 baud @ 16MHz
+    );
+    
+    // Instantiate Timers
+    timer_counter timer0 (
+        .clk(clk),
+        .reset_n(reset_n),
+        .prescaler(3'b011),  // Divide by 64
+        .mode(2'b00)
+    );
+    
+    // Instantiate SPI
+    spi_master spi (
+        .clk(clk),
+        .reset_n(reset_n),
+        .miso(spi_miso),
+        .mosi(spi_mosi),
+        .sck(spi_sck),
+        .ss(spi_ss)
+    );
+    
+    // Instantiate I2C (TWI)
+    i2c_master i2c (
+        .clk(clk),
+        .reset_n(reset_n),
+        .sda(i2c_sda),
+        .scl(i2c_scl)
+    );
+    
+    // Instantiate ADC
+    adc_module adc (
+        .clk(clk),
+        .reset_n(reset_n),
+        .adc_in(adc_in)
+    );
+
+endmodule
