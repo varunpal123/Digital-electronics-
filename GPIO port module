@@ -1,0 +1,79 @@
+// GPIO Port Module for ATmega328P
+// Implements bidirectional I/O with pull-ups
+
+module gpio_port (
+    input wire clk,
+    input wire reset_n,
+    input wire [7:0] ddr,       // Data Direction Register (1=output, 0=input)
+    input wire [7:0] port_out,  // Output data register
+    input wire pullup_en,         // Enable internal pull-ups
+    output reg [7:0] pin_in,    // Input pin values
+    inout wire [7:0] io_pin     // Actual I/O pins
+);
+
+    genvar i;
+    generate
+        for (i = 0; i < 8; i = i + 1) begin : gpio_bit
+            // Tri-state buffer for bidirectional I/O
+            assign io_pin[i] = ddr[i] ? port_out[i] : 1'bz;
+            
+            // Pull-up resistor (weak high)
+            assign (weak1, weak0) io_pin[i] = (pullup_en && !ddr[i]) ? port_out[i] : 1'bz;
+        end
+    endgenerate
+
+    // Synchronize and capture input values
+    reg [7:0] pin_sync1, pin_sync2;
+    
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            pin_sync1 <= 8'b0;
+            pin_sync2 <= 8'b0;
+            pin_in <= 8'b0;
+        end else begin
+            // Two-stage synchronizer for metastability protection
+            pin_sync1 <= io_pin;
+            pin_sync2 <= pin_sync1;
+            pin_in <= pin_sync2;
+        end
+    end
+
+endmodule
+
+
+// Arduino Pin Mapping Module
+// Maps Arduino digital pins to ATmega328P ports
+
+module arduino_pin_map (
+    input wire [7:0] portb,
+    input wire [7:0] portc,
+    input wire [7:0] portd,
+    output wire [13:0] digital_pin,
+    output wire [5:0] analog_pin
+);
+
+    // Digital Pin Mapping
+    assign digital_pin[0]  = portd[0];  // D0 (RX)
+    assign digital_pin[1]  = portd[1];  // D1 (TX)
+    assign digital_pin[2]  = portd[2];  // D2
+    assign digital_pin[3]  = portd[3];  // D3 (PWM)
+    assign digital_pin[4]  = portd[4];  // D4
+    assign digital_pin[5]  = portd[5];  // D5 (PWM)
+    assign digital_pin[6]  = portd[6];  // D6 (PWM)
+    assign digital_pin[7]  = portd[7];  // D7
+    assign digital_pin[8]  = portb[0];  // D8
+    assign digital_pin[9]  = portb[1];  // D9 (PWM)
+    assign digital_pin[10] = portb[2];  // D10 (PWM/SS)
+    assign digital_pin[11] = portb[3];  // D11 (PWM/MOSI)
+    assign digital_pin[12] = portb[4];  // D12 (MISO)
+    assign digital_pin[13] = portb[5];  // D13 (SCK/LED)
+    
+    // Analog Pin Mapping (also digital 14-19)
+    assign analog_pin[0] = portc[0];  // A0
+    assign analog_pin[1] = portc[1];  // A1
+    assign analog_pin[2] = portc[2];  // A2
+    assign analog_pin[3] = portc[3];  // A3
+    assign analog_pin[4] = portc[4];  // A4 (SDA)
+    assign analog_pin[5] = portc[5];  // A5 (SCL)
+
+endmodule
