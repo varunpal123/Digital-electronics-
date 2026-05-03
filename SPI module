@@ -1,0 +1,147 @@
+// SPI Master Module for ATmega328P
+// Implements SPI communication protocol
+
+module spi_master (
+    input wire clk,
+    input wire reset_n,
+    
+    // Configuration
+    input wire [1:0] clock_div,    // Clock divider: 00=/4, 01=/16, 10=/64, 11=/128
+    input wire cpol,              // Clock polarity
+    input wire cpha,              // Clock phase
+    input wire lsb_first,         // LSB first (default is MSB first)
+    
+    // Data interface
+    input wire [7:0] tx_data,
+    input wire tx_start,
+    output reg [7:0] rx_data,
+    output reg busy,
+    output reg done,
+    
+    // SPI pins
+    output reg sck,               // Serial Clock
+    output reg mosi,              // Master Out Slave In
+    input wire miso,              // Master In Slave Out
+    output reg ss                 // Slave Select (active low)
+);
+
+    // State machine
+    localparam IDLE     = 2'b00;
+    localparam TRANSFER = 2'b01;
+    localparam FINISH   = 2'b10;
+    
+    reg [1:0] state;
+    reg [7:0] shift_reg;
+    reg [2:0] bit_counter;
+    reg [7:0] clk_counter;
+    reg [7:0] clk_div_value;
+    reg sck_edge;
+    
+    // Determine clock divider value
+    always @(*) begin
+        case (clock_div)
+            2'b00: clk_div_value = 4;
+            2'b01: clk_div_value = 16;
+            2'b10: clk_div_value = 64;
+            2'b11: clk_div_value = 128;
+        endcase
+    end
+    
+    // SPI clock generation
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            clk_counter <= 0;
+            sck_edge <= 0;
+        end else if (state == TRANSFER) begin
+            if (clk_counter >= (clk_div_value >> 1) - 1) begin
+                clk_counter <= 0;
+                sck_edge <= 1;
+            end else begin
+                clk_counter <= clk_counter + 1;
+                sck_edge <= 0;
+            end
+        end else begin
+            clk_counter <= 0;
+            sck_edge <= 0;
+        end
+    end
+    
+    // Main SPI state machine
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            state <= IDLE;
+            sck <= cpol;
+            mosi <= 0;
+            ss <= 1;
+            busy <= 0;
+            done <= 0;
+            bit_counter <= 0;
+            rx_data <= 0;
+        end else begin
+            done <= 0;
+            
+            case (state)
+                IDLE: begin
+                    busy <= 0;
+                    ss <= 1;
+                    sck <= cpol;
+                    
+                    if (tx_start) begin
+                        shift_reg <= tx_data;
+                        bit_counter <= 0;
+                        busy <= 1;
+                        ss <= 0;  // Assert slave select
+                        state <= TRANSFER;
+                        
+                        // Setup first bit on MOSI
+                        if (lsb_first)
+                            mosi <= tx_data[0];
+                        else
+                            mosi <= tx_data[7];
+                    end
+                end
+                
+                TRANSFER: begin
+                    if (sck_edge) begin
+                        sck <= ~sck;
+                        
+                        // CPHA = 0: Sample on first edge, setup on second edge
+                        // CPHA = 1: Setup on first edge, sample on second edge
+                        if ((sck == cpol && !cpha) || (sck != cpol && cpha)) begin
+                            // Sample MISO
+                            if (lsb_first)
+                                shift_reg <= {miso, shift_reg[7:1]};
+                            else
+                                shift_reg <= {shift_reg[6:0], miso};
+                            
+                            bit_counter <= bit_counter + 1;
+                            
+                            if (bit_counter == 7) begin
+                                state <= FINISH;
+                            end
+                        end else begin
+                            // Setup next bit on MOSI
+                            if (lsb_first)
+                                mosi <= shift_reg[0];
+                            else
+                                mosi <= shift_reg[7];
+                        end
+                    end
+                end
+                
+                FINISH: begin
+                    if (sck_edge) begin
+                        sck <= cpol;  // Return to idle polarity
+                        ss <= 1;    // Deassert slave select
+                        rx_data <= shift_reg;
+                        done <= 1;
+                        state <= IDLE;
+                    end
+                end
+                
+                default: state <= IDLE;
+            endcase
+        end
+    end
+
+endmodule
