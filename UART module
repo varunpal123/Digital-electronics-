@@ -1,0 +1,206 @@
+// UART Module for ATmega328P
+// Implements asynchronous serial communication
+
+module uart_module (
+    input wire clk,
+    input wire reset_n,
+    
+    // Configuration
+    input wire [15:0] baud_div,   // Baud rate divisor
+    input wire parity_en,           // Enable parity
+    input wire parity_mode,         // 0=even, 1=odd
+    input wire two_stop_bits,       // Use 2 stop bits
+    
+    // Transmitter interface
+    input wire [7:0] tx_data,
+    input wire tx_start,
+    output reg tx_busy,
+    output reg tx,
+    
+    // Receiver interface
+    input wire rx,
+    output reg [7:0] rx_data,
+    output reg rx_ready,
+    output reg rx_error            // Parity or framing error
+);
+
+    // ========== UART Transmitter ==========
+    reg [15:0] tx_baud_counter;
+    reg [3:0] tx_bit_index;
+    reg [9:0] tx_shift_reg;    // Start + 8 data + parity
+    reg tx_parity;
+    
+    localparam TX_IDLE  = 2'b00;
+    localparam TX_START = 2'b01;
+    localparam TX_DATA  = 2'b10;
+    localparam TX_STOP  = 2'b11;
+    
+    reg [1:0] tx_state;
+    
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            tx <= 1'b1;
+            tx_busy <= 1'b0;
+            tx_state <= TX_IDLE;
+            tx_baud_counter <= 0;
+            tx_bit_index <= 0;
+        end else begin
+            case (tx_state)
+                TX_IDLE: begin
+                    tx <= 1'b1;
+                    tx_busy <= 1'b0;
+                    
+                    if (tx_start) begin
+                        tx_shift_reg <= {1'b1, tx_data, 1'b0}; // Stop, Data, Start
+                        tx_parity <= parity_mode ? ~^tx_data : ^tx_data;
+                        tx_busy <= 1'b1;
+                        tx_state <= TX_START;
+                        tx_baud_counter <= 0;
+                    end
+                end
+                
+                TX_START: begin
+                    if (tx_baud_counter >= baud_div) begin
+                        tx <= 1'b0;  // Start bit
+                        tx_baud_counter <= 0;
+                        tx_bit_index <= 0;
+                        tx_state <= TX_DATA;
+                    end else begin
+                        tx_baud_counter <= tx_baud_counter + 1;
+                    end
+                end
+                
+                TX_DATA: begin
+                    if (tx_baud_counter >= baud_div) begin
+                        tx_baud_counter <= 0;
+                        
+                        if (tx_bit_index < 8) begin
+                            tx <= tx_data[tx_bit_index];
+                            tx_bit_index <= tx_bit_index + 1;
+                        end else if (parity_en && tx_bit_index == 8) begin
+                            tx <= tx_parity;
+                            tx_bit_index <= tx_bit_index + 1;
+                        end else begin
+                            tx_state <= TX_STOP;
+                            tx_bit_index <= 0;
+                        end
+                    end else begin
+                        tx_baud_counter <= tx_baud_counter + 1;
+                    end
+                end
+                
+                TX_STOP: begin
+                    tx <= 1'b1;  // Stop bit
+                    
+                    if (tx_baud_counter >= baud_div) begin
+                        if (two_stop_bits && tx_bit_index == 0) begin
+                            tx_bit_index <= 1;
+                            tx_baud_counter <= 0;
+                        end else begin
+                            tx_state <= TX_IDLE;
+                        end
+                    end else begin
+                        tx_baud_counter <= tx_baud_counter + 1;
+                    end
+                end
+            endcase
+        end
+    end
+    
+    // ========== UART Receiver ==========
+    reg [15:0] rx_baud_counter;
+    reg [3:0] rx_bit_index;
+    reg [7:0] rx_shift_reg;
+    reg rx_parity_calc;
+    reg rx_parity_recv;
+    reg [1:0] rx_sync;       // Synchronizer
+    
+    localparam RX_IDLE  = 2'b00;
+    localparam RX_START = 2'b01;
+    localparam RX_DATA  = 2'b10;
+    localparam RX_STOP  = 2'b11;
+    
+    reg [1:0] rx_state;
+    
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            rx_state <= RX_IDLE;
+            rx_ready <= 1'b0;
+            rx_error <= 1'b0;
+            rx_data <= 8'b0;
+            rx_sync <= 2'b11;
+        end else begin
+            // Synchronize RX input
+            rx_sync <= {rx_sync[0], rx};
+            rx_ready <= 1'b0;
+            
+            case (rx_state)
+                RX_IDLE: begin
+                    rx_error <= 1'b0;
+                    rx_bit_index <= 0;
+                    
+                    // Detect start bit (falling edge)
+                    if (rx_sync[1] && !rx_sync[0]) begin
+                        rx_state <= RX_START;
+                        rx_baud_counter <= baud_div >> 1; // Sample at middle
+                    end
+                end
+                
+                RX_START: begin
+                    if (rx_baud_counter >= baud_div) begin
+                        if (!rx_sync[1]) begin  // Valid start bit
+                            rx_state <= RX_DATA;
+                            rx_baud_counter <= 0;
+                        end else begin  // False start
+                            rx_state <= RX_IDLE;
+                        end
+                    end else begin
+                        rx_baud_counter <= rx_baud_counter + 1;
+                    end
+                end
+                
+                RX_DATA: begin
+                    if (rx_baud_counter >= baud_div) begin
+                        rx_baud_counter <= 0;
+                        
+                        if (rx_bit_index < 8) begin
+                            rx_shift_reg[rx_bit_index] <= rx_sync[1];
+                            rx_bit_index <= rx_bit_index + 1;
+                        end else if (parity_en && rx_bit_index == 8) begin
+                            rx_parity_recv <= rx_sync[1];
+                            rx_bit_index <= rx_bit_index + 1;
+                        end else begin
+                            rx_data <= rx_shift_reg;
+                            rx_state <= RX_STOP;
+                        end
+                    end else begin
+                        rx_baud_counter <= rx_baud_counter + 1;
+                    end
+                end
+                
+                RX_STOP: begin
+                    if (rx_baud_counter >= baud_div) begin
+                        rx_baud_counter <= 0;
+                        
+                        if (rx_sync[1]) begin  // Valid stop bit
+                            // Check parity if enabled
+                            rx_parity_calc = parity_mode ? ~^rx_data : ^rx_data;
+                            if (parity_en && (rx_parity_recv != rx_parity_calc)) begin
+                                rx_error <= 1'b1;
+                            end else begin
+                                rx_ready <= 1'b1;
+                            end
+                        end else begin  // Framing error
+                            rx_error <= 1'b1;
+                        end
+                        
+                        rx_state <= RX_IDLE;
+                    end else begin
+                        rx_baud_counter <= rx_baud_counter + 1;
+                    end
+                end
+            endcase
+        end
+    end
+
+endmodule
