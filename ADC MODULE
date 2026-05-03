@@ -1,0 +1,185 @@
+// ADC Module for ATmega328P
+// 10-bit successive approximation ADC
+
+module adc_module (
+    input wire clk,
+    input wire reset_n,
+    
+    // Configuration
+    input wire [2:0] channel,       // Channel select (0-7)
+    input wire [2:0] prescaler,     // Clock prescaler
+    input wire [1:0] vref_sel,      // Reference voltage select
+    input wire left_adjust,       // Left adjust result
+    
+    // Control
+    input wire start_conversion,
+    input wire auto_trigger,      // Auto trigger mode
+    
+    // Analog inputs
+    input wire [5:0] adc_in,       // 6 analog input channels
+    
+    // Output
+    output reg [9:0] adc_result,
+    output reg conversion_complete,
+    output reg busy
+);
+
+    // Reference voltage selection
+    localparam VREF_AREF     = 2'b00;  // External AREF pin
+    localparam VREF_AVCC     = 2'b01;  // AVCC with cap on AREF
+    localparam VREF_INTERNAL = 2'b11;  // Internal 1.1V reference
+
+    // State machine
+    localparam IDLE        = 3'b000;
+    localparam SAMPLE      = 3'b001;
+    localparam CONVERT     = 3'b010;
+    localparam COMPLETE    = 3'b011;
+    
+    reg [2:0] state;
+    reg [3:0] bit_counter;
+    reg [9:0] sar_reg;          // Successive Approximation Register
+    reg [7:0] prescaler_counter;
+    reg [7:0] prescaler_value;
+    reg adc_clk;
+    
+    // Sample and hold
+    reg selected_input;
+    
+    // Determine prescaler value (ADC clock should be 50-200 kHz)
+    always @(*) begin
+        case (prescaler)
+            3'b000: prescaler_value = 2;
+            3'b001: prescaler_value = 2;
+            3'b010: prescaler_value = 4;
+            3'b011: prescaler_value = 8;
+            3'b100: prescaler_value = 16;
+            3'b101: prescaler_value = 32;
+            3'b110: prescaler_value = 64;
+            3'b111: prescaler_value = 128;
+        endcase
+    end
+    
+    // ADC clock generation
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            prescaler_counter <= 0;
+            adc_clk <= 0;
+        end else if (state != IDLE) begin
+            if (prescaler_counter >= prescaler_value - 1) begin
+                prescaler_counter <= 0;
+                adc_clk <= ~adc_clk;
+            end else begin
+                prescaler_counter <= prescaler_counter + 1;
+            end
+        end else begin
+            prescaler_counter <= 0;
+            adc_clk <= 0;
+        end
+    end
+    
+    // Input multiplexer
+    always @(*) begin
+        case (channel)
+            3'b000: selected_input = adc_in[0];
+            3'b001: selected_input = adc_in[1];
+            3'b010: selected_input = adc_in[2];
+            3'b011: selected_input = adc_in[3];
+            3'b100: selected_input = adc_in[4];
+            3'b101: selected_input = adc_in[5];
+            3'b110: selected_input = 0;  // Internal bandgap reference
+            3'b111: selected_input = 0;  // GND
+            default: selected_input = 0;
+        endcase
+    end
+    
+    // Main ADC state machine
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            state <= IDLE;
+            adc_result <= 10'b0;
+            conversion_complete <= 0;
+            busy <= 0;
+            sar_reg <= 10'b0;
+            bit_counter <= 0;
+        end else begin
+            conversion_complete <= 0;
+            
+            case (state)
+                IDLE: begin
+                    busy <= 0;
+                    
+                    if (start_conversion || auto_trigger) begin
+                        busy <= 1;
+                        state <= SAMPLE;
+                        bit_counter <= 0;
+                        sar_reg <= 10'b1000000000;  // Start with MSB
+                    end
+                end
+                
+                SAMPLE: begin
+                    // Sample and hold phase (typically 1.5 ADC clock cycles)
+                    if (adc_clk) begin
+                        state <= CONVERT;
+                    end
+                end
+                
+                CONVERT: begin
+                    // Successive approximation conversion
+                    if (adc_clk) begin
+                        // Compare DAC output with input
+                        // Simplified: In real ADC, this would be analog comparison
+                        // Here we simulate with digital value
+                        
+                        if (bit_counter < 10) begin
+                            // Perform binary search
+                            if (selected_input) begin
+                                // Keep the bit set
+                                sar_reg[9 - bit_counter] <= 1;
+                            end else begin
+                                // Clear the bit
+                                sar_reg[9 - bit_counter] <= 0;
+                            end
+                            
+                            // Set next bit to test
+                            if (bit_counter < 9) begin
+                                sar_reg[8 - bit_counter] <= 1;
+                            end
+                            
+                            bit_counter <= bit_counter + 1;
+                        end else begin
+                            state <= COMPLETE;
+                        end
+                    end
+                end
+                
+                COMPLETE: begin
+                    // Store result
+                    if (left_adjust) begin
+                        adc_result <= {sar_reg[9:2], 2'b00};  // Left adjusted 8-bit result
+                    end else begin
+                        adc_result <= sar_reg;  // Right adjusted 10-bit result
+                    end
+                    
+                    conversion_complete <= 1;
+                    state <= IDLE;
+                end
+                
+                default: state <= IDLE;
+            endcase
+        end
+    end
+
+endmodule
+
+
+// Simple DAC for ADC testing (not part of ATmega328P)
+module dac_10bit (
+    input wire [9:0] digital_in,
+    output wire analog_out
+);
+    // In a real implementation, this would be a resistor ladder
+    // or PWM-based DAC. For simulation, we'd use real numbers.
+    
+    assign analog_out = digital_in[9];  // Simplified for HDL
+    
+endmodule
