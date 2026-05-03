@@ -1,0 +1,154 @@
+// Timer/Counter Module for ATmega328P
+// Implements 16-bit Timer1 with PWM support
+
+module timer_counter (
+    input wire clk,
+    input wire reset_n,
+    input wire [2:0] prescaler,    // Clock prescaler select
+    input wire [1:0] mode,         // Timer mode
+    input wire [15:0] ocr_a,       // Output Compare Register A
+    input wire [15:0] ocr_b,       // Output Compare Register B
+    input wire [15:0] icr,        // Input Capture Register
+    output reg [15:0] tcnt,        // Timer Counter value
+    output reg oc_a,                // Output Compare A pin
+    output reg oc_b,                // Output Compare B pin
+    output reg overflow,            // Overflow interrupt flag
+    output reg compare_a,           // Compare Match A interrupt
+    output reg compare_b            // Compare Match B interrupt
+);
+
+    // Timer Modes
+    localparam NORMAL     = 2'b00;  // Normal mode
+    localparam CTC        = 2'b01;  // Clear Timer on Compare
+    localparam FAST_PWM   = 2'b10;  // Fast PWM
+    localparam PHASE_PWM  = 2'b11;  // Phase Correct PWM
+
+    // Prescaler values
+    reg [15:0] prescaler_counter;
+    reg [15:0] prescaler_value;
+    reg timer_tick;
+    
+    // PWM direction for phase-correct mode
+    reg count_up;
+    
+    // Determine prescaler value
+    always @(*) begin
+        case (prescaler)
+            3'b000: prescaler_value = 0;      // Timer stopped
+            3'b001: prescaler_value = 1;      // No prescaling
+            3'b010: prescaler_value = 8;      // /8
+            3'b011: prescaler_value = 64;     // /64
+            3'b100: prescaler_value = 256;    // /256
+            3'b101: prescaler_value = 1024;   // /1024
+            default: prescaler_value = 1;
+        endcase
+    end
+    
+    // Prescaler counter
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            prescaler_counter <= 0;
+            timer_tick <= 0;
+        end else if (prescaler_value == 0) begin
+            timer_tick <= 0;
+        end else if (prescaler_counter >= prescaler_value - 1) begin
+            prescaler_counter <= 0;
+            timer_tick <= 1;
+        end else begin
+            prescaler_counter <= prescaler_counter + 1;
+            timer_tick <= 0;
+        end
+    end
+    
+    // Main timer logic
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            tcnt <= 16'h0000;
+            overflow <= 0;
+            compare_a <= 0;
+            compare_b <= 0;
+            oc_a <= 0;
+            oc_b <= 0;
+            count_up <= 1;
+        end else if (timer_tick) begin
+            case (mode)
+                NORMAL: begin
+                    // Normal mode - count to 0xFFFF
+                    if (tcnt == 16'hFFFF) begin
+                        tcnt <= 16'h0000;
+                        overflow <= 1;
+                    end else begin
+                        tcnt <= tcnt + 1;
+                        overflow <= 0;
+                    end
+                end
+                
+                CTC: begin
+                    // Clear Timer on Compare Match
+                    if (tcnt == ocr_a) begin
+                        tcnt <= 16'h0000;
+                        compare_a <= 1;
+                        oc_a <= ~oc_a;  // Toggle output
+                    end else begin
+                        tcnt <= tcnt + 1;
+                        compare_a <= 0;
+                    end
+                    
+                    if (tcnt == ocr_b) begin
+                        compare_b <= 1;
+                        oc_b <= ~oc_b;
+                    end else begin
+                        compare_b <= 0;
+                    end
+                end
+                
+                FAST_PWM: begin
+                    // Fast PWM mode
+                    if (tcnt == icr) begin
+                        tcnt <= 16'h0000;
+                        overflow <= 1;
+                        oc_a <= 1;
+                        oc_b <= 1;
+                    end else begin
+                        tcnt <= tcnt + 1;
+                        overflow <= 0;
+                    end
+                    
+                    // Compare match - clear output
+                    if (tcnt == ocr_a) oc_a <= 0;
+                    if (tcnt == ocr_b) oc_b <= 0;
+                end
+                
+                PHASE_PWM: begin
+                    // Phase Correct PWM
+                    if (count_up) begin
+                        if (tcnt == icr) begin
+                            count_up <= 0;
+                            overflow <= 1;
+                        end else begin
+                            tcnt <= tcnt + 1;
+                            overflow <= 0;
+                        end
+                        
+                        if (tcnt == ocr_a) oc_a <= 0;
+                        if (tcnt == ocr_b) oc_b <= 0;
+                    end else begin
+                        if (tcnt == 0) begin
+                            count_up <= 1;
+                        end else begin
+                            tcnt <= tcnt - 1;
+                        end
+                        
+                        if (tcnt == ocr_a) oc_a <= 1;
+                        if (tcnt == ocr_b) oc_b <= 1;
+                    end
+                end
+            endcase
+        end else begin
+            overflow <= 0;
+            compare_a <= 0;
+            compare_b <= 0;
+        end
+    end
+
+endmodule
