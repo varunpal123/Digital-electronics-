@@ -1,0 +1,159 @@
+// AVR 8-bit ALU Module
+// Supports all ATmega328P ALU operations
+
+module avr_alu (
+    input wire clk,
+    input wire reset_n,
+    input wire [7:0] operand_a,     // First operand
+    input wire [7:0] operand_b,     // Second operand
+    input wire [3:0] operation,     // ALU operation select
+    input wire carry_in,           // Carry flag input
+    output reg [7:0] result,        // Result output
+    output reg carry_out,          // Carry flag
+    output reg zero,               // Zero flag
+    output reg negative,           // Negative flag
+    output reg overflow,           // Overflow flag
+    output reg half_carry          // Half carry flag
+);
+
+    // ALU Operation Codes
+    localparam ADD  = 4'b0000;  // Addition
+    localparam ADC  = 4'b0001;  // Add with carry
+    localparam SUB  = 4'b0010;  // Subtraction
+    localparam SBC  = 4'b0011;  // Subtract with carry
+    localparam AND  = 4'b0100;  // Logical AND
+    localparam OR   = 4'b0101;  // Logical OR
+    localparam EOR  = 4'b0110;  // Exclusive OR
+    localparam COM  = 4'b0111;  // One's complement
+    localparam NEG  = 4'b1000;  // Two's complement
+    localparam INC  = 4'b1001;  // Increment
+    localparam DEC  = 4'b1010;  // Decrement
+    localparam LSL  = 4'b1011;  // Logical shift left
+    localparam LSR  = 4'b1100;  // Logical shift right
+    localparam ASR  = 4'b1101;  // Arithmetic shift right
+    localparam ROR  = 4'b1110;  // Rotate right through carry
+    localparam ROL  = 4'b1111;  // Rotate left through carry
+
+    reg [8:0] temp_result;    // Extended result for carry detection
+
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            result <= 8'b0;
+            carry_out <= 1'b0;
+            zero <= 1'b0;
+            negative <= 1'b0;
+            overflow <= 1'b0;
+            half_carry <= 1'b0;
+        end else begin
+            case (operation)
+                ADD: begin
+                    temp_result = operand_a + operand_b;
+                    result = temp_result[7:0];
+                    carry_out = temp_result[8];
+                    half_carry = (operand_a[3:0] + operand_b[3:0]) > 4'hF;
+                    overflow = (operand_a[7] == operand_b[7]) && (result[7] != operand_a[7]);
+                end
+                
+                ADC: begin
+                    temp_result = operand_a + operand_b + carry_in;
+                    result = temp_result[7:0];
+                    carry_out = temp_result[8];
+                    half_carry = (operand_a[3:0] + operand_b[3:0] + carry_in) > 4'hF;
+                    overflow = (operand_a[7] == operand_b[7]) && (result[7] != operand_a[7]);
+                end
+                
+                SUB: begin
+                    temp_result = operand_a - operand_b;
+                    result = temp_result[7:0];
+                    carry_out = temp_result[8];
+                    half_carry = (operand_a[3:0] < operand_b[3:0]);
+                    overflow = (operand_a[7] != operand_b[7]) && (result[7] != operand_a[7]);
+                end
+                
+                SBC: begin
+                    temp_result = operand_a - operand_b - carry_in;
+                    result = temp_result[7:0];
+                    carry_out = temp_result[8];
+                    half_carry = (operand_a[3:0] < (operand_b[3:0] + carry_in));
+                    overflow = (operand_a[7] != operand_b[7]) && (result[7] != operand_a[7]);
+                end
+                
+                AND: begin
+                    result = operand_a & operand_b;
+                    carry_out = 1'b0;
+                    overflow = 1'b0;
+                end
+                
+                OR: begin
+                    result = operand_a | operand_b;
+                    carry_out = 1'b0;
+                    overflow = 1'b0;
+                end
+                
+                EOR: begin
+                    result = operand_a ^ operand_b;
+                    carry_out = 1'b0;
+                    overflow = 1'b0;
+                end
+                
+                COM: begin
+                    result = ~operand_a;
+                    carry_out = 1'b1;
+                    overflow = 1'b0;
+                end
+                
+                NEG: begin
+                    result = -operand_a;
+                    carry_out = (operand_a != 8'b0);
+                    overflow = (operand_a == 8'h80);
+                end
+                
+                INC: begin
+                    result = operand_a + 1;
+                    overflow = (operand_a == 8'h7F);
+                end
+                
+                DEC: begin
+                    result = operand_a - 1;
+                    overflow = (operand_a == 8'h80);
+                end
+                
+                LSL: begin
+                    {carry_out, result} = {operand_a, 1'b0};
+                    overflow = carry_out ^ result[7];
+                end
+                
+                LSR: begin
+                    {result, carry_out} = {1'b0, operand_a};
+                    overflow = carry_out;
+                end
+                
+                ASR: begin
+                    {result, carry_out} = {operand_a[7], operand_a};
+                    overflow = carry_out ^ operand_a[7];
+                end
+                
+                ROR: begin
+                    {result, carry_out} = {carry_in, operand_a};
+                    overflow = result[7] ^ carry_out;
+                end
+                
+                ROL: begin
+                    {carry_out, result} = {operand_a, carry_in};
+                    overflow = carry_out ^ result[7];
+                end
+                
+                default: begin
+                    result = 8'b0;
+                    carry_out = 1'b0;
+                    overflow = 1'b0;
+                end
+            endcase
+            
+            // Update status flags
+            zero = (result == 8'b0);
+            negative = result[7];
+        end
+    end
+
+endmodule
